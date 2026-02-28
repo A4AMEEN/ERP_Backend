@@ -44,7 +44,32 @@ async function seedPlayers() {
 app.get('/api/players', async (req, res) => {
     try {
         const players = await Player.find();
+        // await players.deleteMany({});
+        console.log("deleted", players);
         res.json(players);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/reset', async (req, res) => {
+    try {
+        await Player.updateMany({}, {
+            $set: {
+                'stats.totalMatches': 0,
+                'stats.totalGoals': 0,
+                'stats.wins': 0,
+                'stats.draws': 0,
+                'stats.losses': 0,
+                'stats.penaltyGoals': 0,
+                'stats.freekickGoals': 0,
+                'stats.cornerGoals': 0,
+                'stats.ownGoals': 0,
+                'concededMatches': 0
+            }
+        });
+
+        res.json({ ok: true, message: 'All player stats reset to zero.' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
