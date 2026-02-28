@@ -16,7 +16,7 @@ mongoose.connect(MONGO_URI).then(async () => {
 }).catch(err => console.error('MongoDB error:', err));
 
 async function seedPlayers() {
-    await Player.deleteMany();
+    
     const count = await Player.countDocuments();
     if (count === 0) {
         await Player.insertMany([
