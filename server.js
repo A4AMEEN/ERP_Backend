@@ -15,6 +15,7 @@ mongoose.connect(MONGO_URI).then(async () => {
     await seedPlayers();
 }).catch(err => console.error('MongoDB error:', err));
 
+// ─── Seed: only if NO players exist at all ──────────────────────────────────
 async function seedPlayers() {
     const count = await Player.countDocuments();
     if (count === 0) {
@@ -37,45 +38,66 @@ async function seedPlayers() {
             }
         ]);
         console.log('Seeded Shakthi and Shynu with fresh stats');
+    } else {
+        console.log(`Found ${count} existing player(s) — skipping seed`);
     }
 }
 
-// GET all players
+// ─── Helper: build $inc objects from a match payload ────────────────────────
+function buildIncrements(payload, multiplier = 1) {
+    const {
+        result,
+        me_normalGoals = 0, me_penaltyGoals = 0, me_freekickGoals = 0,
+        me_cornerGoals = 0, me_ownGoals = 0,
+        friend_normalGoals = 0, friend_penaltyGoals = 0, friend_freekickGoals = 0,
+        friend_cornerGoals = 0, friend_ownGoals = 0
+    } = payload;
+
+    const myEffective = me_normalGoals + me_penaltyGoals + me_freekickGoals + me_cornerGoals + friend_ownGoals;
+    const friendEffective = friend_normalGoals + friend_penaltyGoals + friend_freekickGoals + friend_cornerGoals + me_ownGoals;
+    const m = multiplier;
+
+    const meInc = {
+        'stats.totalMatches': 1 * m,
+        'stats.totalGoals':   myEffective * m,
+        'stats.penaltyGoals': me_penaltyGoals * m,
+        'stats.freekickGoals': me_freekickGoals * m,
+        'stats.cornerGoals':  me_cornerGoals * m,
+        'stats.ownGoals':     me_ownGoals * m,
+    };
+    if (result === 'win')  meInc['stats.wins']   = 1 * m;
+    if (result === 'draw') meInc['stats.draws']  = 1 * m;
+    if (result === 'loss') meInc['stats.losses'] = 1 * m;
+    if (friendEffective > 0) meInc['concededMatches'] = 1 * m;
+
+    const friendInc = {
+        'stats.totalMatches': 1 * m,
+        'stats.totalGoals':   friendEffective * m,
+        'stats.penaltyGoals': friend_penaltyGoals * m,
+        'stats.freekickGoals': friend_freekickGoals * m,
+        'stats.cornerGoals':  friend_cornerGoals * m,
+        'stats.ownGoals':     friend_ownGoals * m,
+    };
+    if (result === 'loss') friendInc['stats.wins']   = 1 * m;
+    if (result === 'draw') friendInc['stats.draws']  = 1 * m;
+    if (result === 'win')  friendInc['stats.losses'] = 1 * m;
+    if (myEffective > 0) friendInc['concededMatches'] = 1 * m;
+
+    return { meInc, friendInc };
+}
+
+// ─── GET /api/players ────────────────────────────────────────────────────────
 app.get('/api/players', async (req, res) => {
     try {
         const players = await Player.find();
-        // await players.deleteMany({});
-        console.log("deleted", players);
+        console.log('GET /api/players ->', players.map(p => ({ name: p.name, id: p._id })));
         res.json(players);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-app.get('/api/reset', async (req, res) => {
-    try {
-        await Player.updateMany({}, {
-            $set: {
-                'stats.totalMatches': 0,
-                'stats.totalGoals': 0,
-                'stats.wins': 0,
-                'stats.draws': 0,
-                'stats.losses': 0,
-                'stats.penaltyGoals': 0,
-                'stats.freekickGoals': 0,
-                'stats.cornerGoals': 0,
-                'stats.ownGoals': 0,
-                'concededMatches': 0
-            }
-        });
-
-        res.json({ ok: true, message: 'All player stats reset to zero.' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// GET player by name
+// ─── GET /api/players/:name ──────────────────────────────────────────────────
 app.get('/api/players/:name', async (req, res) => {
     try {
         const player = await Player.findOne({ name: req.params.name });
@@ -86,7 +108,7 @@ app.get('/api/players/:name', async (req, res) => {
     }
 });
 
-// PUT update player stats
+// ─── PUT /api/players/:name ──────────────────────────────────────────────────
 app.put('/api/players/:name', async (req, res) => {
     try {
         const player = await Player.findOneAndUpdate(
@@ -101,7 +123,7 @@ app.put('/api/players/:name', async (req, res) => {
     }
 });
 
-// PATCH increment specific stats
+// ─── PATCH /api/players/:name/increment ─────────────────────────────────────
 app.patch('/api/players/:name/increment', async (req, res) => {
     try {
         const updates = {};
@@ -120,107 +142,65 @@ app.patch('/api/players/:name/increment', async (req, res) => {
     }
 });
 
-// ─── Helper: build increment objects from a match payload ───────────────────
-function buildIncrements(payload, multiplier = 1) {
-    const {
-        result,
-        me_normalGoals = 0, me_penaltyGoals = 0, me_freekickGoals = 0,
-        me_cornerGoals = 0, me_ownGoals = 0,
-        friend_normalGoals = 0, friend_penaltyGoals = 0, friend_freekickGoals = 0,
-        friend_cornerGoals = 0, friend_ownGoals = 0
-    } = payload;
-
-    const myGoalsScored = me_normalGoals + me_penaltyGoals + me_freekickGoals + me_cornerGoals;
-    const friendGoalsScored = friend_normalGoals + friend_penaltyGoals + friend_freekickGoals + friend_cornerGoals;
-    const myEffective = myGoalsScored + friend_ownGoals;
-    const friendEffective = friendGoalsScored + me_ownGoals;
-
-    const m = multiplier;
-
-    const meInc = {
-        'stats.totalMatches': 1 * m,
-        'stats.totalGoals': myEffective * m,
-        'stats.penaltyGoals': me_penaltyGoals * m,
-        'stats.freekickGoals': me_freekickGoals * m,
-        'stats.cornerGoals': me_cornerGoals * m,
-        'stats.ownGoals': me_ownGoals * m,
-    };
-    if (result === 'win') meInc['stats.wins'] = 1 * m;
-    if (result === 'draw') meInc['stats.draws'] = 1 * m;
-    if (result === 'loss') meInc['stats.losses'] = 1 * m;
-    if (friendEffective > 0) meInc['concededMatches'] = 1 * m;
-
-    const friendInc = {
-        'stats.totalMatches': 1 * m,
-        'stats.totalGoals': friendEffective * m,
-        'stats.penaltyGoals': friend_penaltyGoals * m,
-        'stats.freekickGoals': friend_freekickGoals * m,
-        'stats.cornerGoals': friend_cornerGoals * m,
-        'stats.ownGoals': friend_ownGoals * m,
-    };
-    if (result === 'loss') friendInc['stats.wins'] = 1 * m;
-    if (result === 'draw') friendInc['stats.draws'] = 1 * m;
-    if (result === 'win') friendInc['stats.losses'] = 1 * m;
-    if (myEffective > 0) friendInc['concededMatches'] = 1 * m;
-
-    return { meInc, friendInc };
-}
-
-/**
- * POST /api/matches
- * Adds a match result and updates both players.
- */
+// ─── POST /api/matches ───────────────────────────────────────────────────────
 app.post('/api/matches', async (req, res) => {
     try {
         const { meInc, friendInc } = buildIncrements(req.body, 1);
-
         const [updatedMe, updatedFriend] = await Promise.all([
             Player.findOneAndUpdate({ name: 'Shakthi' }, { $inc: meInc }, { new: true }),
-            Player.findOneAndUpdate({ name: 'Shynu' }, { $inc: friendInc }, { new: true })
+            Player.findOneAndUpdate({ name: 'Shynu' },   { $inc: friendInc }, { new: true })
         ]);
-
+        console.log('POST /api/matches -> updated', updatedMe?.name, updatedFriend?.name);
         res.json({ me: updatedMe, friend: updatedFriend });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-/**
- * POST /api/matches/reverse
- * Reverses a previously added match (used for edit and delete).
- */
+// ─── POST /api/matches/reverse ───────────────────────────────────────────────
 app.post('/api/matches/reverse', async (req, res) => {
     try {
         const { meInc, friendInc } = buildIncrements(req.body, -1);
-
         const [updatedMe, updatedFriend] = await Promise.all([
             Player.findOneAndUpdate({ name: 'Shakthi' }, { $inc: meInc }, { new: true }),
-            Player.findOneAndUpdate({ name: 'Shynu' }, { $inc: friendInc }, { new: true })
+            Player.findOneAndUpdate({ name: 'Shynu' },   { $inc: friendInc }, { new: true })
         ]);
-
         res.json({ me: updatedMe, friend: updatedFriend });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-/**
- * POST /api/reset
- * ONE-TIME USE: Resets all player stats to zero.
- * ⚠️  Remove or protect this route after using it once!
- */
-app.post('/api/reset', async (req, res) => {
+// ─── GET /api/reset  (WIPE all stats + delete duplicates, keep only 1 doc per player) ──
+// ⚠️  Remove this route after you've run it once!
+app.get('/api/reset', async (req, res) => {
     try {
-        await Player.updateMany({}, {
-            $set: {
-                'stats.totalMatches': 0, 'stats.totalGoals': 0,
-                'stats.wins': 0, 'stats.draws': 0, 'stats.losses': 0,
-                'stats.penaltyGoals': 0, 'stats.freekickGoals': 0,
-                'stats.cornerGoals': 0, 'stats.ownGoals': 0,
-                'concededMatches': 0
+        // Delete ALL player documents first
+        await Player.deleteMany({});
+
+        // Re-create fresh ones
+        await Player.insertMany([
+            {
+                name: 'Shakthi',
+                stats: {
+                    totalMatches: 0, totalGoals: 0, wins: 0, draws: 0, losses: 0,
+                    penaltyGoals: 0, freekickGoals: 0, cornerGoals: 0, ownGoals: 0
+                },
+                concededMatches: 0
+            },
+            {
+                name: 'Shynu',
+                stats: {
+                    totalMatches: 0, totalGoals: 0, wins: 0, draws: 0, losses: 0,
+                    penaltyGoals: 0, freekickGoals: 0, cornerGoals: 0, ownGoals: 0
+                },
+                concededMatches: 0
             }
-        });
-        res.json({ ok: true, message: 'All player stats reset to zero.' });
+        ]);
+
+        const players = await Player.find();
+        console.log('RESET complete ->', players.map(p => ({ name: p.name, id: p._id })));
+        res.json({ ok: true, message: 'All players deleted and re-created fresh.', players });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
