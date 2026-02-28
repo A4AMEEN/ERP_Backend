@@ -2,6 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const Player = require('./player');
+const Match = require('./match');
 require('dotenv').config();
 
 const app = express();
@@ -15,7 +16,7 @@ mongoose.connect(MONGO_URI).then(async () => {
     await seedPlayers();
 }).catch(err => console.error('MongoDB error:', err));
 
-// ─── Seed: only if NO players exist at all ──────────────────────────────────
+// ─── Seed players if none exist ──────────────────────────────────────────────
 async function seedPlayers() {
     const count = await Player.countDocuments();
     if (count === 0) {
@@ -37,13 +38,13 @@ async function seedPlayers() {
                 concededMatches: 0
             }
         ]);
-        console.log('Seeded Shakthi and Shynu with fresh stats');
+        console.log('Seeded Shakthi and Shynu');
     } else {
         console.log(`Found ${count} existing player(s) — skipping seed`);
     }
 }
 
-// ─── Helper: build $inc objects from a match payload ────────────────────────
+// ─── Helper: build $inc objects ──────────────────────────────────────────────
 function buildIncrements(payload, multiplier = 1) {
     const {
         result,
@@ -59,28 +60,28 @@ function buildIncrements(payload, multiplier = 1) {
 
     const meInc = {
         'stats.totalMatches': 1 * m,
-        'stats.totalGoals':   myEffective * m,
+        'stats.totalGoals': myEffective * m,
         'stats.penaltyGoals': me_penaltyGoals * m,
         'stats.freekickGoals': me_freekickGoals * m,
-        'stats.cornerGoals':  me_cornerGoals * m,
-        'stats.ownGoals':     me_ownGoals * m,
+        'stats.cornerGoals': me_cornerGoals * m,
+        'stats.ownGoals': me_ownGoals * m,
     };
-    if (result === 'win')  meInc['stats.wins']   = 1 * m;
-    if (result === 'draw') meInc['stats.draws']  = 1 * m;
+    if (result === 'win') meInc['stats.wins'] = 1 * m;
+    if (result === 'draw') meInc['stats.draws'] = 1 * m;
     if (result === 'loss') meInc['stats.losses'] = 1 * m;
     if (friendEffective > 0) meInc['concededMatches'] = 1 * m;
 
     const friendInc = {
         'stats.totalMatches': 1 * m,
-        'stats.totalGoals':   friendEffective * m,
+        'stats.totalGoals': friendEffective * m,
         'stats.penaltyGoals': friend_penaltyGoals * m,
         'stats.freekickGoals': friend_freekickGoals * m,
-        'stats.cornerGoals':  friend_cornerGoals * m,
-        'stats.ownGoals':     friend_ownGoals * m,
+        'stats.cornerGoals': friend_cornerGoals * m,
+        'stats.ownGoals': friend_ownGoals * m,
     };
-    if (result === 'loss') friendInc['stats.wins']   = 1 * m;
-    if (result === 'draw') friendInc['stats.draws']  = 1 * m;
-    if (result === 'win')  friendInc['stats.losses'] = 1 * m;
+    if (result === 'loss') friendInc['stats.wins'] = 1 * m;
+    if (result === 'draw') friendInc['stats.draws'] = 1 * m;
+    if (result === 'win') friendInc['stats.losses'] = 1 * m;
     if (myEffective > 0) friendInc['concededMatches'] = 1 * m;
 
     return { meInc, friendInc };
@@ -90,7 +91,6 @@ function buildIncrements(payload, multiplier = 1) {
 app.get('/api/players', async (req, res) => {
     try {
         const players = await Player.find();
-        console.log('GET /api/players ->', players.map(p => ({ name: p.name, id: p._id })));
         res.json(players);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -142,43 +142,106 @@ app.patch('/api/players/:name/increment', async (req, res) => {
     }
 });
 
-// ─── POST /api/matches ───────────────────────────────────────────────────────
+// ─── GET /api/history  — fetch all match history (newest first) ──────────────
+app.get('/api/history', async (req, res) => {
+    try {
+        const matches = await Match.find().sort({ createdAt: -1 });
+        res.json(matches);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── POST /api/matches  — add match, save to history, update player stats ────
 app.post('/api/matches', async (req, res) => {
     try {
         const { meInc, friendInc } = buildIncrements(req.body, 1);
+
+        // Save match history record to DB
+        const savedMatch = await Match.create({
+            matchDate: req.body.matchDate,
+            result: req.body.result,
+            me_normalGoals: req.body.me_normalGoals || 0,
+            me_penaltyGoals: req.body.me_penaltyGoals || 0,
+            me_freekickGoals: req.body.me_freekickGoals || 0,
+            me_cornerGoals: req.body.me_cornerGoals || 0,
+            me_ownGoals: req.body.me_ownGoals || 0,
+            friend_normalGoals: req.body.friend_normalGoals || 0,
+            friend_penaltyGoals: req.body.friend_penaltyGoals || 0,
+            friend_freekickGoals: req.body.friend_freekickGoals || 0,
+            friend_cornerGoals: req.body.friend_cornerGoals || 0,
+            friend_ownGoals: req.body.friend_ownGoals || 0,
+        });
+
+        // Update player stats
         const [updatedMe, updatedFriend] = await Promise.all([
             Player.findOneAndUpdate({ name: 'Shakthi' }, { $inc: meInc }, { new: true }),
-            Player.findOneAndUpdate({ name: 'Shynu' },   { $inc: friendInc }, { new: true })
+            Player.findOneAndUpdate({ name: 'Shynu' }, { $inc: friendInc }, { new: true })
         ]);
-        console.log('POST /api/matches -> updated', updatedMe?.name, updatedFriend?.name);
-        res.json({ me: updatedMe, friend: updatedFriend });
+
+        res.json({ me: updatedMe, friend: updatedFriend, match: savedMatch });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// ─── POST /api/matches/reverse ───────────────────────────────────────────────
+// ─── POST /api/matches/reverse  — undo a match by its _id ───────────────────
 app.post('/api/matches/reverse', async (req, res) => {
     try {
         const { meInc, friendInc } = buildIncrements(req.body, -1);
-        const [updatedMe, updatedFriend] = await Promise.all([
+
+        const ops = [
             Player.findOneAndUpdate({ name: 'Shakthi' }, { $inc: meInc }, { new: true }),
-            Player.findOneAndUpdate({ name: 'Shynu' },   { $inc: friendInc }, { new: true })
-        ]);
+            Player.findOneAndUpdate({ name: 'Shynu' }, { $inc: friendInc }, { new: true }),
+        ];
+
+        // If an _id was sent, delete that history record from DB
+        if (req.body._id) {
+            ops.push(Match.findByIdAndDelete(req.body._id));
+        }
+
+        const [updatedMe, updatedFriend] = await Promise.all(ops);
         res.json({ me: updatedMe, friend: updatedFriend });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// ─── GET /api/reset  (WIPE all stats + delete duplicates, keep only 1 doc per player) ──
-// ⚠️  Remove this route after you've run it once!
+// ─── PUT /api/matches/:id  — update an existing match record ─────────────────
+app.put('/api/matches/:id', async (req, res) => {
+    try {
+        const updated = await Match.findByIdAndUpdate(
+            req.params.id,
+            {
+                matchDate: req.body.matchDate,
+                result: req.body.result,
+                me_normalGoals: req.body.me_normalGoals || 0,
+                me_penaltyGoals: req.body.me_penaltyGoals || 0,
+                me_freekickGoals: req.body.me_freekickGoals || 0,
+                me_cornerGoals: req.body.me_cornerGoals || 0,
+                me_ownGoals: req.body.me_ownGoals || 0,
+                friend_normalGoals: req.body.friend_normalGoals || 0,
+                friend_penaltyGoals: req.body.friend_penaltyGoals || 0,
+                friend_freekickGoals: req.body.friend_freekickGoals || 0,
+                friend_cornerGoals: req.body.friend_cornerGoals || 0,
+                friend_ownGoals: req.body.friend_ownGoals || 0,
+            },
+            { new: true }
+        );
+        if (!updated) return res.status(404).json({ error: 'Match not found' });
+        res.json(updated);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── GET /api/reset  — wipe everything and start fresh ───────────────────────
+// ⚠️  Remove after use!
 app.get('/api/reset', async (req, res) => {
     try {
-        // Delete ALL player documents first
         await Player.deleteMany({});
+        await Match.deleteMany({});
 
-        // Re-create fresh ones
         await Player.insertMany([
             {
                 name: 'Shakthi',
@@ -199,8 +262,7 @@ app.get('/api/reset', async (req, res) => {
         ]);
 
         const players = await Player.find();
-        console.log('RESET complete ->', players.map(p => ({ name: p.name, id: p._id })));
-        res.json({ ok: true, message: 'All players deleted and re-created fresh.', players });
+        res.json({ ok: true, message: 'Reset complete — all data cleared.', players });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
