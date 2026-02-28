@@ -16,37 +16,22 @@ mongoose.connect(MONGO_URI).then(async () => {
 }).catch(err => console.error('MongoDB error:', err));
 
 async function seedPlayers() {
-
     const count = await Player.countDocuments();
     if (count === 0) {
         await Player.insertMany([
             {
                 name: 'Shakthi',
                 stats: {
-                    totalMatches: 0,
-                    totalGoals: 0,
-                    wins: 0,
-                    draws: 0,
-                    losses: 0,
-                    penaltyGoals: 0,
-                    freekickGoals: 0,
-                    cornerGoals: 0,
-                    ownGoals: 0
+                    totalMatches: 0, totalGoals: 0, wins: 0, draws: 0, losses: 0,
+                    penaltyGoals: 0, freekickGoals: 0, cornerGoals: 0, ownGoals: 0
                 },
                 concededMatches: 0
             },
             {
                 name: 'Shynu',
                 stats: {
-                    totalMatches: 0,
-                    totalGoals: 0,
-                    wins: 0,
-                    draws: 0,
-                    losses: 0,
-                    penaltyGoals: 0,
-                    freekickGoals: 0,
-                    cornerGoals: 0,
-                    ownGoals: 0
+                    totalMatches: 0, totalGoals: 0, wins: 0, draws: 0, losses: 0,
+                    penaltyGoals: 0, freekickGoals: 0, cornerGoals: 0, ownGoals: 0
                 },
                 concededMatches: 0
             }
@@ -59,7 +44,6 @@ async function seedPlayers() {
 app.get('/api/players', async (req, res) => {
     try {
         const players = await Player.find();
-        console.log(players);
         res.json(players);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -111,48 +95,59 @@ app.patch('/api/players/:name/increment', async (req, res) => {
     }
 });
 
+// ─── Helper: build increment objects from a match payload ───────────────────
+function buildIncrements(payload, multiplier = 1) {
+    const {
+        result,
+        me_normalGoals = 0, me_penaltyGoals = 0, me_freekickGoals = 0,
+        me_cornerGoals = 0, me_ownGoals = 0,
+        friend_normalGoals = 0, friend_penaltyGoals = 0, friend_freekickGoals = 0,
+        friend_cornerGoals = 0, friend_ownGoals = 0
+    } = payload;
+
+    const myGoalsScored = me_normalGoals + me_penaltyGoals + me_freekickGoals + me_cornerGoals;
+    const friendGoalsScored = friend_normalGoals + friend_penaltyGoals + friend_freekickGoals + friend_cornerGoals;
+    const myEffective = myGoalsScored + friend_ownGoals;
+    const friendEffective = friendGoalsScored + me_ownGoals;
+
+    const m = multiplier;
+
+    const meInc = {
+        'stats.totalMatches': 1 * m,
+        'stats.totalGoals': myEffective * m,
+        'stats.penaltyGoals': me_penaltyGoals * m,
+        'stats.freekickGoals': me_freekickGoals * m,
+        'stats.cornerGoals': me_cornerGoals * m,
+        'stats.ownGoals': me_ownGoals * m,
+    };
+    if (result === 'win') meInc['stats.wins'] = 1 * m;
+    if (result === 'draw') meInc['stats.draws'] = 1 * m;
+    if (result === 'loss') meInc['stats.losses'] = 1 * m;
+    if (friendEffective > 0) meInc['concededMatches'] = 1 * m;
+
+    const friendInc = {
+        'stats.totalMatches': 1 * m,
+        'stats.totalGoals': friendEffective * m,
+        'stats.penaltyGoals': friend_penaltyGoals * m,
+        'stats.freekickGoals': friend_freekickGoals * m,
+        'stats.cornerGoals': friend_cornerGoals * m,
+        'stats.ownGoals': friend_ownGoals * m,
+    };
+    if (result === 'loss') friendInc['stats.wins'] = 1 * m;
+    if (result === 'draw') friendInc['stats.draws'] = 1 * m;
+    if (result === 'win') friendInc['stats.losses'] = 1 * m;
+    if (myEffective > 0) friendInc['concededMatches'] = 1 * m;
+
+    return { meInc, friendInc };
+}
+
 /**
  * POST /api/matches
- * Adds a match result and updates both players atomically.
+ * Adds a match result and updates both players.
  */
 app.post('/api/matches', async (req, res) => {
     try {
-        const {
-            result,
-            me_normalGoals = 0, me_penaltyGoals = 0, me_freekickGoals = 0, me_cornerGoals = 0, me_ownGoals = 0,
-            friend_normalGoals = 0, friend_penaltyGoals = 0, friend_freekickGoals = 0, friend_cornerGoals = 0, friend_ownGoals = 0
-        } = req.body;
-
-        const myGoalsScored = me_normalGoals + me_penaltyGoals + me_freekickGoals + me_cornerGoals;
-        const friendGoalsScored = friend_normalGoals + friend_penaltyGoals + friend_freekickGoals + friend_cornerGoals;
-        const myEffective = myGoalsScored + friend_ownGoals;
-        const friendEffective = friendGoalsScored + me_ownGoals;
-
-        const meInc = {
-            'stats.totalMatches': 1,
-            'stats.totalGoals': myEffective,
-            'stats.penaltyGoals': me_penaltyGoals,
-            'stats.freekickGoals': me_freekickGoals,
-            'stats.cornerGoals': me_cornerGoals,
-            'stats.ownGoals': me_ownGoals,
-        };
-        if (result === 'win') meInc['stats.wins'] = 1;
-        if (result === 'draw') meInc['stats.draws'] = 1;
-        if (result === 'loss') meInc['stats.losses'] = 1;
-        if (friendEffective > 0) meInc['concededMatches'] = 1;
-
-        const friendInc = {
-            'stats.totalMatches': 1,
-            'stats.totalGoals': friendEffective,
-            'stats.penaltyGoals': friend_penaltyGoals,
-            'stats.freekickGoals': friend_freekickGoals,
-            'stats.cornerGoals': friend_cornerGoals,
-            'stats.ownGoals': friend_ownGoals,
-        };
-        if (result === 'loss') friendInc['stats.wins'] = 1;
-        if (result === 'draw') friendInc['stats.draws'] = 1;
-        if (result === 'win') friendInc['stats.losses'] = 1;
-        if (myEffective > 0) friendInc['concededMatches'] = 1;
+        const { meInc, friendInc } = buildIncrements(req.body, 1);
 
         const [updatedMe, updatedFriend] = await Promise.all([
             Player.findOneAndUpdate({ name: 'Shakthi' }, { $inc: meInc }, { new: true }),
@@ -160,6 +155,47 @@ app.post('/api/matches', async (req, res) => {
         ]);
 
         res.json({ me: updatedMe, friend: updatedFriend });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/**
+ * POST /api/matches/reverse
+ * Reverses a previously added match (used for edit and delete).
+ */
+app.post('/api/matches/reverse', async (req, res) => {
+    try {
+        const { meInc, friendInc } = buildIncrements(req.body, -1);
+
+        const [updatedMe, updatedFriend] = await Promise.all([
+            Player.findOneAndUpdate({ name: 'Shakthi' }, { $inc: meInc }, { new: true }),
+            Player.findOneAndUpdate({ name: 'Shynu' }, { $inc: friendInc }, { new: true })
+        ]);
+
+        res.json({ me: updatedMe, friend: updatedFriend });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/**
+ * POST /api/reset
+ * ONE-TIME USE: Resets all player stats to zero.
+ * ⚠️  Remove or protect this route after using it once!
+ */
+app.post('/api/reset', async (req, res) => {
+    try {
+        await Player.updateMany({}, {
+            $set: {
+                'stats.totalMatches': 0, 'stats.totalGoals': 0,
+                'stats.wins': 0, 'stats.draws': 0, 'stats.losses': 0,
+                'stats.penaltyGoals': 0, 'stats.freekickGoals': 0,
+                'stats.cornerGoals': 0, 'stats.ownGoals': 0,
+                'concededMatches': 0
+            }
+        });
+        res.json({ ok: true, message: 'All player stats reset to zero.' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
